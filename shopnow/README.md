@@ -93,8 +93,8 @@ chmod +x teste_carga.sh
 ```
 
 O script utiliza o **Apache Benchmark (`ab`)** com:
-- 1000 requisições
-- 50 conexões concorrentes
+- 10000 requisições
+- 100 conexões concorrentes
 
 ### Instalação do Apache Benchmark
 

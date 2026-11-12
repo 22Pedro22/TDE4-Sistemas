@@ -1,5 +1,5 @@
 #!/bin/bash
-# Script auxiliar para subir os 3 servidores + balanceador de uma vez
+# Script auxiliar para subir os 3 servidores e balanceador de uma vez
 # Uso: ./iniciar.sh [algoritmo]
 # Exemplos:
 #   ./iniciar.sh
@@ -15,7 +15,8 @@ echo "=============================================="
 echo "Algoritmo: $ALGORITMO"
 echo ""
 
-# Sobe os 3 servidores em background
+# sobe os 3 servidores em background
+
 python3 "$DIR/servidor.py" 8001 &
 PID1=$!
 python3 "$DIR/servidor.py" 8002 &
@@ -28,7 +29,8 @@ sleep 1
 echo "Servidores iniciados (PIDs: $PID1, $PID2, $PID3)"
 echo ""
 
-# Função de limpeza ao sair (Ctrl+C)
+# função de limpeza ao sair (Ctrl+C)
+
 limpar() {
     echo ""
     echo "Encerrando todos os processos..."
@@ -37,5 +39,6 @@ limpar() {
 }
 trap limpar SIGINT SIGTERM
 
-# Sobe o balanceador em primeiro plano
+# sobe o balanceador em primeiro plano
+
 python3 "$DIR/balanceador.py" "$ALGORITMO"

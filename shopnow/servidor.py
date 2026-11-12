@@ -1,34 +1,37 @@
 #!/usr/bin/env python3
-"""
-Instância do site ShopNow.
-Rode várias vezes em portas diferentes para simular múltiplos servidores.
-Exemplo:
-    python servidor.py 8001
-    python servidor.py 8002
-    python servidor.py 8003
-"""
+
 
 import sys
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 
 
+class ServidorShopNow(ThreadingHTTPServer):
+    request_queue_size = 256
+    daemon_threads = True
+
+
 class ManipuladorShopNow(BaseHTTPRequestHandler):
-    """Manipula as requisições HTTP de cada instância do site."""
 
     identificador_servidor = "Servidor-Desconhecido"
     porta_servidor = 0
 
     def do_GET(self):
-        """Responde a requisições GET com uma página HTML simples."""
+
+        # responde as requisições do tipo GET com uma página HTML
+
         self._responder_pagina()
 
     def do_HEAD(self):
-        """Responde a requisições HEAD (usado por ferramentas de teste)."""
+
+        # responde a requisições HEAD (usado por ferramentas de teste)
+
         self._responder_pagina(apenas_cabecalhos=True)
 
     def _responder_pagina(self, apenas_cabecalhos=False):
-        """Gera e envia a página HTML do ShopNow."""
+
+        # gera e envia a página HTML da loja
+
         horario = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
         html = f"""<!DOCTYPE html>
@@ -55,7 +58,7 @@ class ManipuladorShopNow(BaseHTTPRequestHandler):
         .container {{
             background: white;
             padding: 40px 50px;
-            border-radius: 12px;
+            border-radius: 0px;
             box-shadow: 0 10px 40px rgba(0,0,0,0.2);
             text-align: center;
             max-width: 500px;
@@ -70,7 +73,7 @@ class ManipuladorShopNow(BaseHTTPRequestHandler):
             background: #667eea;
             color: white;
             padding: 8px 20px;
-            border-radius: 20px;
+            border-radius: 0px;
             font-size: 1.1em;
             margin: 15px 0;
             font-weight: bold;
@@ -111,13 +114,15 @@ class ManipuladorShopNow(BaseHTTPRequestHandler):
             self.wfile.write(conteudo)
 
     def log_message(self, formato, *args):
-        """Log personalizado em português."""
+
         print(f"[{self.identificador_servidor}] {args[0]}", flush=True)
 
 
 def iniciar_servidor(porta: int):
-    """Inicia uma instância do servidor ShopNow na porta informada."""
-    # Mapeia a porta para um nome amigável (8001 → Servidor-1, etc.)
+
+    #Inicia uma instância do servidor na porta informada
+    # Mapeia a porta para um nome legível
+
     mapa_nomes = {
         8001: "Servidor-1",
         8002: "Servidor-2",
@@ -129,7 +134,7 @@ def iniciar_servidor(porta: int):
     ManipuladorShopNow.porta_servidor = porta
 
     endereco = ("0.0.0.0", porta)
-    servidor = HTTPServer(endereco, ManipuladorShopNow)
+    servidor = ServidorShopNow(endereco, ManipuladorShopNow)
 
     print(f"🚀 {identificador} rodando em http://127.0.0.1:{porta}")
     print("   Pressione Ctrl+C para parar.\n")

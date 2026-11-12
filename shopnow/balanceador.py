@@ -1,28 +1,30 @@
 #!/usr/bin/env python3
+
 """
-Balanceador de Carga do ShopNow.
 
 Algoritmos implementados:
-  1. Round Robin (rodízio)
-  2. Least Connections (menor número de conexões ativas)
 
-Também realiza health check dos servidores e permite simular falhas.
+    Round Robin (rodízio)
+    Least Connections (menor número de conexões ativas)
+
 """
 
 import socket
 import threading
 import time
 import sys
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
+from urllib.parse import urlparse, parse_qs
 from collections import defaultdict
 
 import config
 
 
 class EstadoServidor:
-    """Guarda o estado de um servidor backend."""
+
+    # guarda o estado do servidor backend
 
     def __init__(self, host: str, porta: int, identificador: str):
         self.host = host
@@ -41,7 +43,6 @@ class EstadoServidor:
 
 
 class Balanceador:
-    """Balanceador de carga com suporte a múltiplos algoritmos."""
 
     def __init__(self, servidores: list, algoritmo: str = "round_robin"):
         self.servidores = [
@@ -50,10 +51,12 @@ class Balanceador:
         ]
         self.algoritmo = algoritmo
         self.indice_round_robin = 0
+        self.indice_desempate = 0  # desempate do least_connections
         self.lock = threading.Lock()
         self.rodando = True
 
-        # Inicia o health check em background
+        # inicia o health check em background
+
         thread_health = threading.Thread(target=self._loop_health_check, daemon=True)
         thread_health.start()
 
@@ -64,11 +67,15 @@ class Balanceador:
         print()
 
     def servidores_ativos(self) -> list:
-        """Retorna apenas os servidores que estão ativos."""
+
+        # só retorna os servidores ativos
+
         return [s for s in self.servidores if s.ativo]
 
     def escolher_servidor(self) -> EstadoServidor | None:
-        """Escolhe o próximo servidor de acordo com o algoritmo configurado."""
+
+        # scolhe o próximo servidor de acordo com o algoritmo configurado
+
         with self.lock:
             ativos = self.servidores_ativos()
             if not ativos:
@@ -79,28 +86,42 @@ class Balanceador:
             elif self.algoritmo == "least_connections":
                 return self._least_connections(ativos)
             else:
-                # Fallback seguro
+
+                # fallback seguro
+
                 return ativos[0]
 
     def _round_robin(self, ativos: list) -> EstadoServidor:
-        """Algoritmo Round Robin: distribui as requisições de forma cíclica."""
+
+        # algoritmo do round robin
+
         servidor = ativos[self.indice_round_robin % len(ativos)]
         self.indice_round_robin = (self.indice_round_robin + 1) % len(ativos)
         return servidor
 
     def _least_connections(self, ativos: list) -> EstadoServidor:
-        """Algoritmo Least Connections: escolhe o servidor com menos conexões ativas."""
-        return min(ativos, key=lambda s: s.conexoes_ativas)
+
+        # algoritmo do least connections
+
+        menor = min(s.conexoes_ativas for s in ativos)
+        empatados = [s for s in ativos if s.conexoes_ativas == menor]
+        servidor = empatados[self.indice_desempate % len(empatados)]
+        self.indice_desempate += 1
+        return servidor
 
     def _loop_health_check(self):
-        """Verifica periodicamente se os servidores estão respondendo."""
+
+        # vai verificando se os servidores respondem
+
         while self.rodando:
             for servidor in self.servidores:
                 self._verificar_saude(servidor)
             time.sleep(config.INTERVALO_HEALTH_CHECK)
 
     def _verificar_saude(self, servidor: EstadoServidor):
-        """Faz uma requisição simples para verificar se o servidor está vivo."""
+
+        # faz requisição simples para verificar o estaudo do servidor
+
         url = f"http://{servidor.host}:{servidor.porta}/"
         try:
             requisicao = Request(url, method="GET")
@@ -116,11 +137,32 @@ class Balanceador:
             self._marcar_falha(servidor)
 
     def _marcar_falha(self, servidor: EstadoServidor):
-        """Incrementa contador de falhas e marca como offline se necessário."""
+
         servidor.falhas_consecutivas += 1
         if servidor.falhas_consecutivas >= 2 and servidor.ativo:
             servidor.ativo = False
             print(f"❌ {servidor.identificador} marcado como OFFLINE (falha de health check)")
+
+    def registrar_falha_encaminhamento(self, servidor: EstadoServidor):
+
+        with self.lock:
+            servidor.falhas_consecutivas += 1
+            if servidor.ativo:
+                servidor.ativo = False
+                print(f"❌ {servidor.identificador} marcado como OFFLINE (erro de encaminhamento)")
+
+    def escolher_e_reservar(self, excluidos):
+
+        with self.lock:
+            ativos = [s for s in self.servidores_ativos() if s.identificador not in excluidos]
+            if not ativos:
+                return None
+            if self.algoritmo == "least_connections":
+                servidor = self._least_connections(ativos)
+            else:
+                servidor = self._round_robin(ativos)
+            servidor.conexoes_ativas += 1
+            return servidor
 
     def incrementar_conexao(self, servidor: EstadoServidor):
         with self.lock:
@@ -131,19 +173,30 @@ class Balanceador:
             servidor.conexoes_ativas = max(0, servidor.conexoes_ativas - 1)
 
     def status(self) -> str:
-        """Retorna um resumo do estado atual dos servidores."""
+
+        # resumo do estado atual dos servidores
+
         linhas = [f"Algoritmo atual: {self.algoritmo}", "Servidores:"]
         for s in self.servidores:
             linhas.append(f"  - {s}")
         return "\n".join(linhas)
 
 
-# Instância global do balanceador (será criada no main)
+# instância global do balanceador (será criada no main)
 balanceador_global: Balanceador | None = None
 
 
+class ServidorBalanceador(ThreadingHTTPServer):
+
+    # atende cada cliente em uma thread
+
+    request_queue_size = 256
+    daemon_threads = True
+
+
 class ManipuladorBalanceador(BaseHTTPRequestHandler):
-    """Recebe as requisições dos clientes e repassa para um servidor backend."""
+
+    # recebe as requisições dos clientes e repassa para um servidor backend
 
     def do_GET(self):
         self._processar_requisicao()
@@ -157,69 +210,75 @@ class ManipuladorBalanceador(BaseHTTPRequestHandler):
     def _processar_requisicao(self):
         global balanceador_global
 
-        if self.path == "/status":
+        caminho = urlparse(self.path).path
+
+        if caminho == "/status":
             self._responder_status()
             return
 
-        if self.path == "/algoritmo":
+        if caminho == "/algoritmo":
             self._trocar_algoritmo()
             return
 
-        servidor = balanceador_global.escolher_servidor()
+        tamanho = int(self.headers.get("Content-Length", 0))
+        corpo = self.rfile.read(tamanho) if tamanho > 0 else None
 
-        if servidor is None:
-            self.send_error(503, "Nenhum servidor disponível no momento")
-            return
+        excluidos = set()
+        for _ in range(len(balanceador_global.servidores)):
+            servidor = balanceador_global.escolher_e_reservar(excluidos)
+            if servidor is None:
+                break
+            try:
+                if self._encaminhar_requisicao(servidor, corpo):
+                    return
+            finally:
+                balanceador_global.decrementar_conexao(servidor)
+            excluidos.add(servidor.identificador)  # falhou: tenta outro servidor
 
-        balanceador_global.incrementar_conexao(servidor)
+        self.send_error(503, "Nenhum servidor disponível no momento")
 
-        try:
-            self._encaminhar_requisicao(servidor)
-        finally:
-            balanceador_global.decrementar_conexao(servidor)
+    def _encaminhar_requisicao(self, servidor: EstadoServidor, corpo) -> bool:
 
-    def _encaminhar_requisicao(self, servidor: EstadoServidor):
-        """Encaminha a requisição original para o servidor backend escolhido."""
+        # devolve o status da conexão
+
         url = f"http://{servidor.host}:{servidor.porta}{self.path}"
-
         try:
-            # Lê o corpo da requisição (se houver)
-            tamanho = int(self.headers.get("Content-Length", 0))
-            corpo = self.rfile.read(tamanho) if tamanho > 0 else None
-
             requisicao = Request(url, data=corpo, method=self.command)
-
-            # Copia headers relevantes
             for chave, valor in self.headers.items():
                 if chave.lower() not in ("host", "content-length"):
                     requisicao.add_header(chave, valor)
 
             with urlopen(requisicao, timeout=5) as resposta_backend:
                 conteudo = resposta_backend.read()
-
-                self.send_response(resposta_backend.status)
-                for chave, valor in resposta_backend.getheaders():
-                    if chave.lower() not in ("transfer-encoding",):
-                        self.send_header(chave, valor)
-                self.send_header("X-Balanceador-Servidor", servidor.identificador)
-                self.send_header("X-Balanceador-Algoritmo", balanceador_global.algoritmo)
-                self.end_headers()
-                self.wfile.write(conteudo)
-
-            print(f"→ {self.command} {self.path}  →  {servidor.identificador}")
-
+                status = resposta_backend.status
+                cabecalhos = resposta_backend.getheaders()
+        except HTTPError as e:
+            if e.code >= 500:
+                print(f"⚠️  {servidor.identificador} respondeu {e.code}")
+                balanceador_global.registrar_falha_encaminhamento(servidor)
+                return False
+            status, conteudo, cabecalhos = e.code, e.read(), e.headers.items()
         except Exception as e:
             print(f"⚠️  Erro ao encaminhar para {servidor.identificador}: {e}")
-            # Marca como possível falha
-            servidor.falhas_consecutivas += 1
-            if servidor.falhas_consecutivas >= 2:
-                servidor.ativo = False
-                print(f"❌ {servidor.identificador} marcado como OFFLINE (erro de encaminhamento)")
+            balanceador_global.registrar_falha_encaminhamento(servidor)
+            return False
 
-            self.send_error(502, f"Erro ao comunicar com o servidor backend: {servidor.identificador}")
+        self.send_response(status)
+        for chave, valor in cabecalhos:
+            if chave.lower() not in ("transfer-encoding", "server", "date"):
+                self.send_header(chave, valor)
+        self.send_header("X-Balanceador-Servidor", servidor.identificador)
+        self.send_header("X-Balanceador-Algoritmo", balanceador_global.algoritmo)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(conteudo)
+        print(f"→ {self.command} {self.path}  →  {servidor.identificador}")
+        return True
 
     def _responder_status(self):
-        """Endpoint de status do balanceador."""
+
+        # endpoint de status do balanceador
+
         global balanceador_global
         texto = balanceador_global.status()
         conteudo = texto.encode("utf-8")
@@ -231,10 +290,10 @@ class ManipuladorBalanceador(BaseHTTPRequestHandler):
         self.wfile.write(conteudo)
 
     def _trocar_algoritmo(self):
-        """Permite trocar o algoritmo em tempo de execução via /algoritmo?nome=..."""
-        global balanceador_global
-        from urllib.parse import urlparse, parse_qs
 
+        # permite trocar o algoritmo em tempo de execução
+
+        global balanceador_global
         parametros = parse_qs(urlparse(self.path).query)
         novo = parametros.get("nome", [None])[0]
 
@@ -253,12 +312,13 @@ class ManipuladorBalanceador(BaseHTTPRequestHandler):
         self.wfile.write(conteudo)
 
     def log_message(self, formato, *args):
-        # Silencia o log padrão (já fazemos log customizado)
         pass
 
 
 def iniciar_balanceador(algoritmo: str = None):
-    """Inicializa e sobe o balanceador de carga."""
+
+    # inicia e sobe o balanceador
+
     global balanceador_global
 
     if algoritmo is None:
@@ -267,7 +327,7 @@ def iniciar_balanceador(algoritmo: str = None):
     balanceador_global = Balanceador(config.SERVIDORES, algoritmo=algoritmo)
 
     endereco = ("0.0.0.0", config.PORTA_BALANCEADOR)
-    servidor_http = HTTPServer(endereco, ManipuladorBalanceador)
+    servidor_http = ServidorBalanceador(endereco, ManipuladorBalanceador)
 
     print(f"🌐 Balanceador escutando em http://127.0.0.1:{config.PORTA_BALANCEADOR}")
     print("   Endpoints úteis:")
